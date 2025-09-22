@@ -24,7 +24,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -43,16 +42,26 @@ import com.google.android.exoplayer2.ExoPlayer
 import com.google.android.exoplayer2.MediaItem
 import com.google.android.exoplayer2.Player
 import com.google.android.exoplayer2.ui.PlayerView
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+
+data class SyncData(
+    val targetPosition: Long,
+    val shouldRestart: Boolean,
+    val shouldWait: Boolean,
+    val isMaster: Boolean,
+    val restartIn: Long,
+    val confirmedDevices: Int,
+    val requiredDevices: Int
+)
 
 class MainActivity : ComponentActivity() {
 
@@ -60,7 +69,6 @@ class MainActivity : ComponentActivity() {
     private lateinit var deviceId: String
     private val syncServerUrl = "http://109.195.134.244:3000/api/sync"
     private lateinit var exoPlayer: ExoPlayer
-    private var playbackPosition: Long = 0
 
     private lateinit var sharedPreferences: SharedPreferences
 
@@ -77,10 +85,6 @@ class MainActivity : ComponentActivity() {
 
         Log.d(TAG, "Device ID: $deviceId")
 
-        if (savedInstanceState != null) {
-            playbackPosition = savedInstanceState.getLong("playback_position", 0)
-        }
-
         exoPlayer = ExoPlayer.Builder(this).build().apply {
             repeatMode = Player.REPEAT_MODE_ALL
         }
@@ -88,11 +92,6 @@ class MainActivity : ComponentActivity() {
         setContent {
             AppContent(deviceId)
         }
-    }
-
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-        outState.putLong("playback_position", exoPlayer.currentPosition)
     }
 
     @Composable
@@ -137,17 +136,14 @@ class MainActivity : ComponentActivity() {
         val context = LocalContext.current
         val view = LocalView.current
 
-        // 👇 Правильное объявление переменных состояния
         var isLoading by remember { mutableStateOf(true) }
         var errorMessage by remember { mutableStateOf<String?>(null) }
         var isPlaying by remember { mutableStateOf(false) }
-        var isSyncing by remember { mutableStateOf(false) }
         var syncStatus by remember { mutableStateOf("") }
-        var lastSeekTime by remember { mutableLongStateOf(0L) } // 👈 Исправлено!
-
-        LaunchedEffect(Unit) {
-            hideSystemUI(view)
-        }
+        var restartCountdown by remember { mutableStateOf(0) }
+        var confirmedCount by remember { mutableStateOf(0) }
+        var requiredCount by remember { mutableStateOf(0) }
+        var isWaitingForConfirmation by remember { mutableStateOf(false) }
 
         DisposableEffect(Unit) {
             val stateListener = object : Player.Listener {
@@ -159,22 +155,6 @@ class MainActivity : ComponentActivity() {
                 override fun onPlayerError(error: com.google.android.exoplayer2.PlaybackException) {
                     errorMessage = "Ошибка: ${error.errorCodeName}\n${error.message}"
                     Log.e(TAG, "Player error", error)
-
-                    exoPlayer.playWhenReady = false
-                    CoroutineScope(Dispatchers.Main).launch {
-                        delay(5000)
-                        if (errorMessage != null) {
-                            errorMessage = null
-                            exoPlayer.stop()
-                            exoPlayer.clearMediaItems()
-                            val liveStream = "http://109.195.134.244:8096/stream.m3u8"
-                            val mediaItem = MediaItem.fromUri(liveStream)
-                            exoPlayer.setMediaItem(mediaItem)
-                            exoPlayer.prepare()
-                            exoPlayer.playWhenReady = true
-                            Log.d(TAG, "Auto-restarted after error")
-                        }
-                    }
                 }
             }
 
@@ -184,18 +164,15 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        suspend fun syncWithServer(): Long? {
+        suspend fun syncWithServer(): SyncData? {
             return try {
-                isSyncing = true
-                syncStatus = "Синхронизация с сервером..."
                 val client = OkHttpClient.Builder()
-                    .connectTimeout(10, TimeUnit.SECONDS)
-                    .readTimeout(10, TimeUnit.SECONDS)
+                    .connectTimeout(5, TimeUnit.SECONDS)
+                    .readTimeout(5, TimeUnit.SECONDS)
                     .build()
 
                 val currentPosition = exoPlayer.currentPosition
                 val url = "$syncServerUrl?deviceId=$deviceId&position=$currentPosition"
-                Log.d(TAG, "Sync URL: $url")
 
                 val request = Request.Builder().url(url).build()
                 val response = withContext(Dispatchers.IO) {
@@ -204,119 +181,134 @@ class MainActivity : ComponentActivity() {
 
                 if (response.isSuccessful) {
                     val responseBody = response.body?.string() ?: "{}"
-                    Log.d(TAG, "Sync response: $responseBody")
                     val jsonResponse = JSONObject(responseBody)
 
+                    val targetPosition = jsonResponse.optLong("targetPosition", 0)
                     val isMaster = jsonResponse.optBoolean("isMaster", false)
-                    val shouldSync = jsonResponse.optBoolean("shouldSync", false)
-                    val targetPosition = jsonResponse.optLong("targetPosition", -1)
-                    val alreadySynced = jsonResponse.optBoolean("alreadySynced", false)
-                    val masterDeviceId = jsonResponse.optString("masterDeviceId", "")
+                    val shouldRestart = jsonResponse.optBoolean("shouldRestart", false)
+                    val shouldWait = jsonResponse.optBoolean("shouldWait", false)
+                    val restartIn = jsonResponse.optLong("restartIn", 0)
+                    val confirmedDevices = jsonResponse.optInt("confirmedDevices", 0)
+                    val requiredDevices = jsonResponse.optInt("requiredDevices", 0)
 
-                    syncStatus = if (isMaster) {
-                        "Ведущее устройство • Позиция: ${currentPosition / 1000}с"
-                    } else if (alreadySynced) {
-                        "Синхронизировано с ведущим"
-                    } else if (shouldSync) {
-                        "Первоначальная синхронизация..."
-                    } else {
-                        "Ожидание синхронизации"
+                    restartCountdown = (restartIn / 1000).toInt()
+                    confirmedCount = confirmedDevices
+                    requiredCount = requiredDevices
+                    isWaitingForConfirmation = shouldWait
+
+                    syncStatus = when {
+                        shouldWait -> "Ожидание готовности: $confirmedDevices/$requiredDevices"
+                        shouldRestart -> "ЗАПУСК! Начинаем воспроизведение"
+                        restartIn > 0 -> "Перезапуск через: ${restartIn / 1000}сек"
+                        isMaster -> "Ведущее устройство • ${currentPosition / 1000}с"
+                        else -> "Синхронизировано • ${targetPosition / 1000}с"
                     }
 
-                    Log.d(TAG, "Is master: $isMaster, Should sync: $shouldSync, Target: $targetPosition, Already synced: $alreadySynced")
+                    Log.d(TAG, "Sync: wait=$shouldWait, confirmed=$confirmedDevices/$requiredDevices")
 
-                    // Синхронизируемся только один раз при первом подключении
-                    if (shouldSync && targetPosition > 0) {
-                        Log.d(TAG, "Performing one-time sync to: $targetPosition")
-
-                        // Добавляем время компенсации, которое будет досинхронится
-                        val compensatedPosition = targetPosition + 3000
-                        Log.d(TAG, "Compensated position: $compensatedPosition (original: $targetPosition)")
-                        compensatedPosition // Возвращаем
-                    } else {
-                        null // Не синхронизируемся
-                    }
+                    SyncData(
+                        targetPosition,
+                        shouldRestart,
+                        shouldWait,
+                        isMaster,
+                        restartIn,
+                        confirmedDevices,
+                        requiredDevices
+                    )
                 } else {
-                    syncStatus = "Ошибка синхронизации: ${response.code}"
+                    syncStatus = "Ошибка синхронизации"
                     null
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Sync error", e)
-                syncStatus = "Ошибка синхронизации: ${e.message}"
+                syncStatus = "Ошибка сети"
                 null
-            } finally {
-                isSyncing = false
             }
         }
-        suspend fun sendStatusToServer() {
-            try {
+
+        suspend fun confirmReadiness(): Boolean {
+            return try {
                 val client = OkHttpClient.Builder()
-                    .connectTimeout(5, TimeUnit.SECONDS)
-                    .readTimeout(5, TimeUnit.SECONDS)
+                    .connectTimeout(3, TimeUnit.SECONDS)
+                    .readTimeout(3, TimeUnit.SECONDS)
                     .build()
 
-                val currentPosition = exoPlayer.currentPosition
-                val isPlaying = exoPlayer.isPlaying
-                val url = "$syncServerUrl/status?deviceId=$deviceId&position=$currentPosition&playing=$isPlaying"
-
-                val request = Request.Builder().url(url).build()
-                withContext(Dispatchers.IO) {
-                    client.newCall(request).execute().close()
+                val json = JSONObject().apply {
+                    put("deviceId", deviceId)
                 }
+                val body = json.toString().toRequestBody("application/json".toMediaType())
+
+                val request = Request.Builder()
+                    .url("http://109.195.134.244:3000/api/confirm")
+                    .post(body)
+                    .build()
+
+                val response = withContext(Dispatchers.IO) {
+                    client.newCall(request).execute()
+                }
+
+                response.isSuccessful
             } catch (e: Exception) {
-                Log.e(TAG, "Status update error", e)
+                Log.e(TAG, "Confirm readiness error", e)
+                false
             }
         }
 
         LaunchedEffect(Unit) {
-            Log.d(TAG, "Starting live stream with one-time sync")
-            try {
-                val liveStream = "http://109.195.134.244:8096/stream.m3u8"
-                val mediaItem = MediaItem.fromUri(liveStream)
-                exoPlayer.setMediaItem(mediaItem)
-                exoPlayer.prepare()
+            Log.d(TAG, "Starting ready-confirm synchronization system")
 
-                // Ждем подготовки плеера
-                delay(2000)
+            // Начальная загрузка видео
+            val liveStream = "http://109.195.134.244:8096/stream.m3u8"
+            val mediaItem = MediaItem.fromUri(liveStream)
+            exoPlayer.setMediaItem(mediaItem)
+            exoPlayer.prepare()
 
-                // Выполняем ОДНОРАЗОВУЮ синхронизацию при запуске
-                val targetPosition = syncWithServer()
-                if (targetPosition != null && targetPosition > 0) {
-                    syncStatus = "Синхронизировано на позицию: ${targetPosition / 1000}с"
-                    exoPlayer.seekTo(targetPosition)
-                    Log.d(TAG, "One-time sync to position: $targetPosition")
+            // Ждем готовности плеера
+            delay(3000)
+            exoPlayer.playWhenReady = true
 
-                    // Даем время на буферизацию после seek
-                    delay(1000)
-                } else {
-                    syncStatus = if (syncStatus.contains("Ведущее")) {
-                        "Ведущее устройство"
-                    } else {
-                        "Уже синхронизировано"
+            // Основной цикл синхронизации
+            while (true) {
+                try {
+                    val result = syncWithServer()
+
+                    if (result != null) {
+                        if (result.shouldWait) {
+                            // Фаза ожидания подтверждения готовности
+                            exoPlayer.playWhenReady = false // Приостанавливаем воспроизведение
+                            exoPlayer.seekTo(0) // Перематываем на начало
+
+                            // Подтверждаем готовность
+                            if (confirmReadiness()) {
+                                Log.d(TAG, "Readiness confirmed")
+                            }
+
+                            // Ждем 1 секунду перед следующей проверкой
+                            delay(1000)
+
+                        } else if (result.shouldRestart) {
+                            // Запускаем воспроизведение синхронно
+                            Log.d(TAG, "STARTING SYNCHRONIZED PLAYBACK")
+                            exoPlayer.seekTo(0)
+                            exoPlayer.playWhenReady = true
+                            delay(1000) // Даем время на запуск
+
+                        } else {
+                            // Обычный режим - продолжаем воспроизведение без синхронизации
+                            exoPlayer.playWhenReady = true
+
+                            // УБРАНА СИНХРОНИЗАЦИЯ ПРИ РАСХОЖДЕНИИ > 5 СЕКУНД
+                            // Каждое устройство продолжает воспроизведение со своей текущей позиции
+                            // Синхронизация происходит только при подключении нового устройства
+                        }
                     }
+
+                    delay(2000) // Проверяем каждые 2 секунды
+
+                } catch (e: Exception) {
+                    Log.e(TAG, "Sync loop error", e)
+                    delay(5000)
                 }
-
-                if (playbackPosition > 0) {
-                    exoPlayer.seekTo(playbackPosition)
-                    Log.d(TAG, "Restored position: $playbackPosition")
-                }
-
-                exoPlayer.playWhenReady = true
-
-                // Только отправляем статус, но не синхронизируемся повторно
-                while (true) {
-                    delay(5000) // Отправляем статус каждые 5 секунд
-                    sendStatusToServer()
-
-                    // Периодически проверяем, не сменился ли мастер
-                    delay(10000)
-                    val syncCheck = syncWithServer()
-                    // syncCheck будет null для уже синхронизированных устройств
-                }
-
-            } catch (e: Exception) {
-                Log.e(TAG, "Live stream failed: ${e.message}")
-                errorMessage = "Ошибка подключения: ${e.message}"
             }
         }
 
@@ -334,33 +326,52 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize()
                 )
 
-//                if (isSyncing) {
-//                    Column(
+//                if (isLoading) {
+//                    CircularProgressIndicator(
 //                        modifier = Modifier
 //                            .align(Alignment.Center)
-//                            .background(Color.Black.copy(alpha = 0.7f))
-//                            .padding(16.dp),
-//                        horizontalAlignment = Alignment.CenterHorizontally
-//                    ) {
-//                        CircularProgressIndicator(
-//                            modifier = Modifier.size(40.dp),
-//                            color = Color.White
-//                        )
-//                        Text(
-//                            text = syncStatus,
-//                            color = Color.White,
-//                            modifier = Modifier.padding(top = 8.dp),
-//                            fontSize = 14.sp
-//                        )
-//                    }
+//                            .size(60.dp),
+//                        color = Color.White
+//                    )
 //                }
 
-                if (isLoading && !isPlaying) {
-                    CircularProgressIndicator(
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .size(60.dp),
-                        color = Color.White
+                // Статус синхронизации
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .background(Color.Black.copy(alpha = 0.7f))
+                        .padding(16.dp)
+                ) {
+                    Text(
+                        text = syncStatus,
+                        color = when {
+                            syncStatus.contains("ЗАПУСК") -> Color.Green
+                            syncStatus.contains("Ожидание") -> Color.Yellow
+                            else -> Color.White
+                        },
+                        fontSize = 14.sp
+                    )
+
+                    if (isWaitingForConfirmation) {
+                        Text(
+                            text = "Готовы: $confirmedCount/$requiredCount",
+                            color = Color.Yellow,
+                            fontSize = 12.sp
+                        )
+                    }
+
+                    if (restartCountdown > 0) {
+                        Text(
+                            text = "До перезапуска: ${restartCountdown}сек",
+                            color = Color.Yellow,
+                            fontSize = 12.sp
+                        )
+                    }
+
+                    Text(
+                        text = "ID: ${deviceId.take(8)}",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 10.sp
                     )
                 }
 
@@ -391,7 +402,7 @@ class MainActivity : ComponentActivity() {
                                 exoPlayer.playWhenReady = true
                             }
                         ) {
-                            Text("Повторить")
+                            Text("Перезапустить")
                         }
                     }
                 }
@@ -422,12 +433,5 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         exoPlayer.release()
-    }
-
-    override fun onWindowFocusChanged(hasFocus: Boolean) {
-        super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) {
-            hideSystemUI(window.decorView)
-        }
     }
 }
