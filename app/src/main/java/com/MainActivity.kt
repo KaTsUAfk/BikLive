@@ -336,44 +336,44 @@ class MainActivity : ComponentActivity() {
 //                }
 
                 // Статус синхронизации
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .background(Color.Black.copy(alpha = 0.7f))
-                        .padding(16.dp)
-                ) {
-                    Text(
-                        text = syncStatus,
-                        color = when {
-                            syncStatus.contains("ЗАПУСК") -> Color.Green
-                            syncStatus.contains("Ожидание") -> Color.Yellow
-                            else -> Color.White
-                        },
-                        fontSize = 14.sp
-                    )
-
-                    if (isWaitingForConfirmation) {
-                        Text(
-                            text = "Готовы: $confirmedCount/$requiredCount",
-                            color = Color.Yellow,
-                            fontSize = 12.sp
-                        )
-                    }
-
-                    if (restartCountdown > 0) {
-                        Text(
-                            text = "До перезапуска: ${restartCountdown}сек",
-                            color = Color.Yellow,
-                            fontSize = 12.sp
-                        )
-                    }
-
-                    Text(
-                        text = "ID: ${deviceId.take(8)}",
-                        color = Color.White.copy(alpha = 0.7f),
-                        fontSize = 10.sp
-                    )
-                }
+//                Column(
+//                    modifier = Modifier
+//                        .align(Alignment.TopStart)
+//                        .background(Color.Black.copy(alpha = 0.7f))
+//                        .padding(16.dp)
+//                ) {
+//                    Text(
+//                        text = syncStatus,
+//                        color = when {
+//                            syncStatus.contains("ЗАПУСК") -> Color.Green
+//                            syncStatus.contains("Ожидание") -> Color.Yellow
+//                            else -> Color.White
+//                        },
+//                        fontSize = 14.sp
+//                    )
+//
+//                    if (isWaitingForConfirmation) {
+//                        Text(
+//                            text = "Готовы: $confirmedCount/$requiredCount",
+//                            color = Color.Yellow,
+//                            fontSize = 12.sp
+//                        )
+//                    }
+//
+//                    if (restartCountdown > 0) {
+//                        Text(
+//                            text = "До перезапуска: ${restartCountdown}сек",
+//                            color = Color.Yellow,
+//                            fontSize = 12.sp
+//                        )
+//                    }
+//
+//                    Text(
+//                        text = "ID: ${deviceId.take(8)}",
+//                        color = Color.White.copy(alpha = 0.7f),
+//                        fontSize = 10.sp
+//                    )
+//                }
 
                 if (errorMessage != null) {
                     Column(
