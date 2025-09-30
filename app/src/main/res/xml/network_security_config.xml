@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">109.195.134.244</domain>
+        <domain includeSubdomains="true">dynamicip-109-195-134-244.pppoe.kurgan.ertelecom.ru</domain>
+    </domain-config>
+</network-security-config>
