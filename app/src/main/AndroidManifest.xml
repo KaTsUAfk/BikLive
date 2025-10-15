@@ -17,13 +17,16 @@
         android:label="@string/app_name"
         android:theme="@android:style/Theme.Material.NoActionBar"
         tools:targetApi="31"
+        android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+        android:launchMode="singleTop"
         >
 
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
-            android:theme="@android:style/Theme.Material.NoActionBar">
+            android:theme="@android:style/Theme.Material.NoActionBar"
+            tools:ignore="MissingClass">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
