@@ -60,7 +60,7 @@ class MainActivity : ComponentActivity() {
         private const val SYNC_URL = "http://109.195.134.244:3000/api/sync"
         private const val CONFIRM_URL = "http://109.195.134.244:3000/api/confirm"
         private const val RESTART_URL = "http://109.195.134.244:3000/api/restart"
-        private const val LIVE_URL = "http://109.195.134.244:8096/kurgan/stream.m3u8"
+        private const val LIVE_URL = "http://109.195.134.244:8096/ekat/stream.m3u8"
 
         // Пороги коррекции
         private const val DRIFT_SOFT_MS = 500
@@ -72,7 +72,9 @@ class MainActivity : ComponentActivity() {
         private const val SPEED_DOWN = 0.97f
         private const val SPEED_NORMAL = 1.0f
     }
-
+    private val deviceCity: String by lazy {
+        LIVE_URL.split("/")[3]
+    }
     private lateinit var exoPlayer: ExoPlayer
     private val deviceId: String by lazy { UUID.randomUUID().toString() }
     private val networkClient: OkHttpClient by lazy {
@@ -84,6 +86,7 @@ class MainActivity : ComponentActivity() {
             .build()
     }
     private val syncMutex = Mutex()
+    private val currentCity: String by lazy { extractCityFromUrl(LIVE_URL) }
 
     // Состояния UI
     private var errorMessage by mutableStateOf<String?>(null)
@@ -91,7 +94,13 @@ class MainActivity : ComponentActivity() {
     private var retryCount by mutableStateOf(0)
     private var networkJob: Job? = null
 
-
+    private fun extractCityFromUrl(url: String): String {
+        // LIVE_URL = "http://109.195.134.244:8096/kurgan/stream.m3u8"
+        val path = url.removePrefix("http://").removePrefix("https://")
+        val parts = path.split("/")
+        // parts = ["109.195.134.244:8096", "kurgan", "stream.m3u8"]
+        return if (parts.size >= 2) parts[1] else "kurgan"
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -172,7 +181,6 @@ class MainActivity : ComponentActivity() {
                                 errorMessage = null
                             }
                             Player.STATE_BUFFERING -> {
-                                // Буферизация - нормальное состояние
                             }
                         }
                     }
@@ -321,6 +329,15 @@ class MainActivity : ComponentActivity() {
                         try {
                             val pos = player.currentPosition.coerceAtLeast(0L)
                             val resp = syncWithServer(deviceId, pos)
+
+                            // === Проверка на город===
+                            val sessionCity = resp.sessionId.split("_").getOrNull(1) ?: "kurgan"
+                            if (sessionCity != currentCity && resp.phase != "idle") {
+                                syncStatus = "Ожидание сессии для города $currentCity"
+                                delay(2000)
+                                continue
+                            }
+                            // ======================
 
                             val localNow = System.currentTimeMillis()
                             val offset = resp.serverTime - localNow
@@ -601,13 +618,13 @@ class MainActivity : ComponentActivity() {
         val activeDevices: Int,
         val recommendedAction: String,
         val targetPositionMillis: Long,
-        val remoteCommand: String? = null // <-- Добавлено
+        val remoteCommand: String? = null
     )
 
     private suspend fun syncWithServer(deviceId: String, position: Long): SyncResponse {
         return try {
             syncMutex.withLock {
-                val url = "$SYNC_URL?deviceId=${deviceId}&position=${position}"
+                val url = "$SYNC_URL?deviceId=${deviceId}&position=${position}&city=${currentCity}"
                 val req = Request.Builder()
                     .url(url)
                     .get()
@@ -677,6 +694,7 @@ class MainActivity : ComponentActivity() {
         return try {
             val json = JSONObject().apply {
                 put("deviceId", deviceId)
+                put("city", currentCity)
             }
             val body = json.toString().toRequestBody("application/json".toMediaType())
             val req = Request.Builder()
@@ -702,13 +720,17 @@ class MainActivity : ComponentActivity() {
                     errorMessage = "Нет сети для отправки запроса перезапуска"
                     return@launch
                 }
-
-                val req = Request.Builder().url(RESTART_URL).post("{}".toRequestBody("application/json".toMediaType())).build()
+                // Используем currentCity, который уже определен в классе
+                val json = JSONObject().apply {
+                    put("city", currentCity) // ← Используем существующее поле currentCity
+                }
+                val body = json.toString().toRequestBody("application/json".toMediaType())
+                val req = Request.Builder().url(RESTART_URL).post(body).build()
                 val resp = withContext(Dispatchers.IO) { networkClient.newCall(req).execute() }
                 if (!resp.isSuccessful) {
                     errorMessage = "Не удалось запланировать перезапуск: HTTP ${resp.code}"
                 } else {
-                    errorMessage = "Запрос на перезапуск отправлен успешно"
+                    errorMessage = "Запрос на перезапуск отправлен успешно для города $currentCity"
                     delay(3000)
                     errorMessage = null
                 }
