@@ -444,7 +444,14 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-
+        LaunchedEffect(isNetworkAvailable, phase, errorMessage) {
+            if (errorMessage != null && isNetworkAvailable && phase != "idle") {
+                delay(1000)
+                if (isNetworkAvailable && phase != "idle") {
+                    onClearError()
+                }
+            }
+        }
         Box(modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)) {
