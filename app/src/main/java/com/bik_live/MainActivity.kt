@@ -72,6 +72,7 @@ class MainActivity : ComponentActivity() {
         private const val SPEED_DOWN = 0.97f
         private const val SPEED_NORMAL = 1.0f
     }
+
     private val deviceCity: String by lazy {
         LIVE_URL.split("/")[3]
     }
