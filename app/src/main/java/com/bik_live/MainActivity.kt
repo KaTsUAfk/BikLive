@@ -135,25 +135,24 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun prepareWindow(window: Window) {
-        // Отключаем отображение декора по умолчанию
+
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
-        // Убираем статус-бар и навигационную панель
+
         window.statusBarColor = android.graphics.Color.BLACK
         window.navigationBarColor = android.graphics.Color.BLACK
 
-        // Устанавливаем флаги для полного экрана
+
         window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
         window.addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN)
         window.addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_INSET_DECOR)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        // Для Android 11+ используем новый API для скрытия системных окон
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window.setDecorFitsSystemWindows(false)
         }
     }
-
     private fun buildPlayer(): ExoPlayer {
         val dataSourceFactory = DefaultHttpDataSource.Factory()
             .setUserAgent(Util.getUserAgent(this, "SyncPlayer"))
