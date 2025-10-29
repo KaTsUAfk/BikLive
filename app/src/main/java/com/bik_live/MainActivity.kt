@@ -60,7 +60,7 @@ class MainActivity : ComponentActivity() {
         private const val SYNC_URL = "http://109.195.134.244:3000/api/sync"
         private const val CONFIRM_URL = "http://109.195.134.244:3000/api/confirm"
         private const val RESTART_URL = "http://109.195.134.244:3000/api/restart"
-        private const val LIVE_URL = "http://109.195.134.244:8096/ekat/stream.m3u8"
+        private const val LIVE_URL = "http://109.195.134.244:8096/kurgan/stream.m3u8"
 
         // Пороги коррекции
         private const val DRIFT_SOFT_MS = 500
@@ -145,6 +145,7 @@ class MainActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
         window.addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN)
         window.addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_INSET_DECOR)
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         // Для Android 11+ используем новый API для скрытия системных окон
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -593,7 +594,7 @@ class MainActivity : ComponentActivity() {
                 errorMessage = "Таймаут подключения к серверу. Сервер не отвечает.\nПопытка #$retryCount"
             }
             else -> {
-                errorMessage = "Ошибка синхронизации: ${e.message}\nПопытка #$retryCount"
+                //errorMessage = "Ошибка синхронизации: ${e.message}\nПопытка #$retryCount"
             }
         }
     }
